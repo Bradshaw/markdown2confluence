@@ -8,24 +8,83 @@ module.exports =
 const core = __webpack_require__(6806);
 const github = __webpack_require__(2429);
 const fs = __webpack_require__(5747);
+const bent = __webpack_require__(8138)
 const MarkdownIt = __webpack_require__(1981),
     md = new MarkdownIt();
 
 const inputs = {
   mdFile: "md-file",
+  pageId: "page-id",
   apiUrl: "api-url",
   apiUser: "api-user",
   apiKey: "api-key"
 }
 
 try {
-  // `who-to-greet` input defined in action metadata file
   const mdPath = core.getInput(inputs.mdFile);
-  console.log(`Reading ${mdPath}`);
-  const content = fs.readFileSync(mdPath, {encoding: "utf8"});
-  console.log(md.render(content));
-  //const payload = JSON.stringify(github.context.payload, undefined, 2)
+  const user = core.getInput(inputs.apiUser);
+  const key = core.getInput(inputs.apiKey);
+  const page = core.getInput(inputs.pageId);
+  const url = core.getInput(inputs.apiUrl);
+  const auth = "Basic " + Buffer.from(`${user}:${key}`).toString("base64");
+  const getJSON = bent(
+    url,
+    'GET',
+    {
+      'Content-Type': 'application/json; charset=utf-8',
+      "Authorization" : auth,
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.16; rv:84.0) Gecko/20100101 Firefox/84.0; node12"
+    },
+    'json',
+    [200, 403]
+  )
+  const putJSON = bent(
+    url,
+    'PUT',
+    {
+      'Content-Type': 'application/json; charset=utf-8',
+      "Authorization" : auth,
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.16; rv:84.0) Gecko/20100101 Firefox/84.0; node12"
+    },
+    'json',
+    [200, 403]
+  )
+  const content = md.render(fs.readFileSync(mdPath, {encoding: "utf8"}));
+  console.log(content);
+  async function updateWiki(){
+      let currentPage = await getJSON(`/content/${page}?expand=version`)
+      const title = currentPage.title;
+      const number = currentPage.version.number;
+      const payload = {
+        id: page,
+        type: "page",
+        title: title,
+        body: {
+          storage: {
+            value: content,
+            representation: "storage"
+          }
+        },
+        version: { number: number + 1}
+      }
+      putJSON(`/content/${page}?expand=version`, payload)
+        .catch((error) => {
+        console.error(error);
+        ;(async ()=>{
+          console.error("Error:");
+          console.error(error);
+          console.error(await error.json());
+          console.error(await error.text());
+
+        })().catch(e=>{
+          console.error("Caught")
+          console.error(e);
+        })
+      })
+  }
+  updateWiki();
 } catch (error) {
+  console.error(error.message);
   core.setFailed(error.message);
 }
 
@@ -3673,6 +3732,517 @@ function removeHook (state, name, method) {
 
 /***/ }),
 
+/***/ 7793:
+/***/ ((module) => {
+
+"use strict";
+
+const encodings = new Set(['json', 'buffer', 'string'])
+
+module.exports = mkrequest => (...args) => {
+  const statusCodes = new Set()
+  let method
+  let encoding
+  let headers
+  let baseurl = ''
+
+  args.forEach(arg => {
+    if (typeof arg === 'string') {
+      if (arg.toUpperCase() === arg) {
+        if (method) {
+          const msg = `Can't set method to ${arg}, already set to ${method}.`
+          throw new Error(msg)
+        } else {
+          method = arg
+        }
+      } else if (arg.startsWith('http:') || arg.startsWith('https:')) {
+        baseurl = arg
+      } else {
+        if (encodings.has(arg)) {
+          encoding = arg
+        } else {
+          throw new Error(`Unknown encoding, ${arg}`)
+        }
+      }
+    } else if (typeof arg === 'number') {
+      statusCodes.add(arg)
+    } else if (typeof arg === 'object') {
+      if (Array.isArray(arg) || arg instanceof Set) {
+        arg.forEach(code => statusCodes.add(code))
+      } else {
+        if (headers) {
+          throw new Error('Cannot set headers twice.')
+        }
+        headers = arg
+      }
+    } else {
+      throw new Error(`Unknown type: ${typeof arg}`)
+    }
+  })
+
+  if (!method) method = 'GET'
+  if (statusCodes.size === 0) {
+    statusCodes.add(200)
+  }
+
+  return mkrequest(statusCodes, method, encoding, headers, baseurl)
+}
+
+
+/***/ }),
+
+/***/ 8138:
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+"use strict";
+
+const http = __webpack_require__(8605)
+const https = __webpack_require__(7211)
+const { URL } = __webpack_require__(8835)
+const isStream = __webpack_require__(6060)
+const caseless = __webpack_require__(1227)
+const bytes = __webpack_require__(6889)
+const bent = __webpack_require__(7793)
+const zlib = __webpack_require__(8761)
+const { PassThrough } = __webpack_require__(2413)
+
+const compression = {}
+
+/* istanbul ignore else */
+if (zlib.createBrotliDecompress) compression.br = () => zlib.createBrotliDecompress()
+/* istanbul ignore else */
+if (zlib.createGunzip) compression.gzip = () => zlib.createGunzip()
+/* istanbul ignore else */
+if (zlib.createInflate) compression.deflate = () => zlib.createInflate()
+
+const acceptEncoding = Object.keys(compression).join(', ')
+
+const getResponse = resp => {
+  const ret = new PassThrough()
+  ret.statusCode = resp.statusCode
+  ret.status = resp.statusCode
+  ret.statusMessage = resp.statusMessage
+  ret.headers = resp.headers
+  ret._response = resp
+  if (ret.headers['content-encoding']) {
+    const encodings = ret.headers['content-encoding'].split(', ').reverse()
+    while (encodings.length) {
+      const enc = encodings.shift()
+      if (compression[enc]) {
+        const decompress = compression[enc]()
+        decompress.on('error', (e) => ret.emit('error', new Error('ZBufError', e)))
+        resp = resp.pipe(decompress)
+      } else {
+        break
+      }
+    }
+  }
+  return resp.pipe(ret)
+}
+
+class StatusError extends Error {
+  constructor (res, ...params) {
+    super(...params)
+
+    Error.captureStackTrace(this, StatusError)
+    this.name = 'StatusError'
+    this.message = res.statusMessage
+    this.statusCode = res.statusCode
+    this.json = res.json
+    this.text = res.text
+    this.arrayBuffer = res.arrayBuffer
+    this.headers = res.headers
+    let buffer
+    const get = () => {
+      if (!buffer) buffer = this.arrayBuffer()
+      return buffer
+    }
+    Object.defineProperty(this, 'responseBody', { get })
+  }
+}
+
+const getBuffer = stream => new Promise((resolve, reject) => {
+  const parts = []
+  stream.on('error', reject)
+  stream.on('end', () => resolve(Buffer.concat(parts)))
+  stream.on('data', d => parts.push(d))
+})
+
+const decodings = res => {
+  let _buffer
+  res.arrayBuffer = () => {
+    if (!_buffer) {
+      _buffer = getBuffer(res)
+      return _buffer
+    } else {
+      throw new Error('body stream is locked')
+    }
+  }
+  res.text = () => res.arrayBuffer().then(buff => buff.toString())
+  res.json = async () => {
+    const str = await res.text()
+    try {
+      return JSON.parse(str)
+    } catch (e) {
+      e.message += `str"${str}"`
+      throw e
+    }
+  }
+}
+
+const mkrequest = (statusCodes, method, encoding, headers, baseurl) => (_url, body = null, _headers = {}) => {
+  _url = baseurl + (_url || '')
+  const parsed = new URL(_url)
+  let h
+  if (parsed.protocol === 'https:') {
+    h = https
+  } else if (parsed.protocol === 'http:') {
+    h = http
+  } else {
+    throw new Error(`Unknown protocol, ${parsed.protocol}`)
+  }
+  const request = {
+    path: parsed.pathname + parsed.search,
+    port: parsed.port,
+    method: method,
+    headers: { ...(headers || {}), ..._headers },
+    hostname: parsed.hostname
+  }
+  if (parsed.username || parsed.password) {
+    request.auth = [parsed.username, parsed.password].join(':')
+  }
+  const c = caseless(request.headers)
+  if (encoding === 'json') {
+    if (!c.get('accept')) {
+      c.set('accept', 'application/json')
+    }
+  }
+  if (!c.has('accept-encoding')) {
+    c.set('accept-encoding', acceptEncoding)
+  }
+  return new Promise((resolve, reject) => {
+    const req = h.request(request, async res => {
+      res = getResponse(res)
+      res.on('error', reject)
+      decodings(res)
+      res.status = res.statusCode
+      if (!statusCodes.has(res.statusCode)) {
+        return reject(new StatusError(res))
+      }
+
+      if (!encoding) return resolve(res)
+      else {
+        /* istanbul ignore else */
+        if (encoding === 'buffer') {
+          resolve(res.arrayBuffer())
+        } else if (encoding === 'json') {
+          resolve(res.json())
+        } else if (encoding === 'string') {
+          resolve(res.text())
+        }
+      }
+    })
+    req.on('error', reject)
+    if (body) {
+      if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) {
+        body = bytes.native(body)
+      }
+      if (Buffer.isBuffer(body)) {
+        // noop
+      } else if (typeof body === 'string') {
+        body = Buffer.from(body)
+      } else if (isStream(body)) {
+        body.pipe(req)
+        body = null
+      } else if (typeof body === 'object') {
+        if (!c.has('content-type')) {
+          req.setHeader('content-type', 'application/json')
+        }
+        body = Buffer.from(JSON.stringify(body))
+      } else {
+        reject(new Error('Unknown body type.'))
+      }
+      if (body) {
+        req.setHeader('content-length', body.length)
+        req.end(body)
+      }
+    } else {
+      req.end()
+    }
+  })
+}
+
+module.exports = bent(mkrequest)
+
+
+/***/ }),
+
+/***/ 2803:
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+"use strict";
+/* globals atob, btoa, crypto */
+/* istanbul ignore file */
+
+const bytes = __webpack_require__(5229)
+
+bytes.from = (_from, _encoding) => {
+  if (_from instanceof DataView) return _from
+  if (_from instanceof ArrayBuffer) return new DataView(_from)
+  let buffer
+  if (typeof _from === 'string') {
+    if (!_encoding) {
+      _encoding = 'utf-8'
+    } else if (_encoding === 'base64') {
+      buffer = Uint8Array.from(atob(_from), c => c.charCodeAt(0)).buffer
+      return new DataView(buffer)
+    }
+    if (_encoding !== 'utf-8') throw new Error('Browser support for encodings other than utf-8 not implemented')
+    return new DataView((new TextEncoder()).encode(_from).buffer)
+  } else if (typeof _from === 'object') {
+    if (ArrayBuffer.isView(_from)) {
+      if (_from.byteLength === _from.buffer.byteLength) return new DataView(_from.buffer)
+      else return new DataView(_from.buffer, _from.byteOffset, _from.byteLength)
+    }
+  }
+  throw new Error('Unkown type. Cannot convert to ArrayBuffer')
+}
+
+bytes.toString = (_from, encoding) => {
+  _from = bytes(_from, encoding)
+  const uint = new Uint8Array(_from.buffer, _from.byteOffset, _from.byteLength)
+  const str = String.fromCharCode(...uint)
+  if (encoding === 'base64') {
+    /* would be nice to find a way to do this directly from a buffer
+     * instead of doing two string conversions
+     */
+    return btoa(str)
+  } else {
+    return str
+  }
+}
+
+bytes.native = (_from, encoding) => {
+  if (_from instanceof Uint8Array) return _from
+  _from = bytes.from(_from, encoding)
+  return new Uint8Array(_from.buffer, _from.byteOffset, _from.byteLength)
+}
+
+if (process.browser) bytes._randomFill = (...args) => crypto.getRandomValues(...args)
+
+module.exports = bytes
+
+
+/***/ }),
+
+/***/ 5229:
+/***/ ((module) => {
+
+"use strict";
+
+
+const length = (a, b) => {
+  if (a.byteLength === b.byteLength) return a.byteLength
+  else if (a.byteLength > b.byteLength) return a.byteLength
+  return b.byteLength
+}
+
+const bytes = (_from, encoding) => bytes.from(_from, encoding)
+
+bytes.sorter = (a, b) => {
+  a = bytes(a)
+  b = bytes(b)
+  const len = length(a, b)
+  let i = 0
+  while (i < (len - 1)) {
+    if (i >= a.byteLength) return 1
+    else if (i >= b.byteLength) return -1
+
+    if (a.getUint8(i) < b.getUint8(i)) return -1
+    else if (a.getUint8(i) > b.getUint8(i)) return 1
+    i++
+  }
+  return 0
+}
+
+bytes.compare = (a, b) => !bytes.sorter(a, b)
+bytes.memcopy = (_from, encoding) => {
+  const b = bytes(_from, encoding)
+  return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)
+}
+bytes.arrayBuffer = (_from, encoding) => {
+  _from = bytes(_from, encoding)
+  if (_from.buffer.byteLength === _from.byteLength) return _from.buffer
+  return _from.buffer.slice(_from.byteOffset, _from.byteOffset + _from.byteLength)
+}
+const sliceOptions = (_from, start = 0, end = null) => {
+  _from = bytes(_from)
+  end = (end === null ? _from.byteLength : end) - start
+  return [_from.buffer, _from.byteOffset + start, end]
+}
+bytes.slice = (_from, start, end) => new DataView(...sliceOptions(_from, start, end))
+
+bytes.memcopySlice = (_from, start, end) => {
+  const [buffer, offset, length] = sliceOptions(_from, start, end)
+  return buffer.slice(offset, length + offset)
+}
+bytes.typedArray = (_from, _Class = Uint8Array) => {
+  _from = bytes(_from)
+  return new _Class(_from.buffer, _from.byteOffset, _from.byteLength / _Class.BYTES_PER_ELEMENT)
+}
+
+bytes.concat = (_from) => {
+  _from = Array.from(_from)
+  _from = _from.map(b => bytes(b))
+  const length = _from.reduce((x, y) => x + y.byteLength, 0)
+  const ret = new Uint8Array(length)
+  let i = 0
+  for (const part of _from) {
+    const view = bytes.typedArray(part)
+    ret.set(view, i)
+    i += view.byteLength
+  }
+  return ret.buffer
+}
+
+const maxEntropy = 65536
+
+bytes.random = length => {
+  const ab = new ArrayBuffer(length)
+  if (length > maxEntropy) {
+    let i = 0
+    while (i < ab.byteLength) {
+      let len
+      if (i + maxEntropy > ab.byteLength) len = ab.byteLength - i
+      else len = maxEntropy
+      const view = new Uint8Array(ab, i, len)
+      i += maxEntropy
+      bytes._randomFill(view)
+    }
+  } else {
+    const view = new Uint8Array(ab)
+    bytes._randomFill(view)
+  }
+  return ab
+}
+
+module.exports = bytes
+
+
+/***/ }),
+
+/***/ 6889:
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+"use strict";
+
+const crypto = __webpack_require__(6417)
+const fallback = __webpack_require__(2803).from
+const bytes = __webpack_require__(5229)
+
+bytes.from = (_from, encoding) => {
+  if (_from instanceof DataView) return _from
+  if (_from instanceof ArrayBuffer) return new DataView(_from)
+  if (typeof _from === 'string') {
+    _from = Buffer.from(_from, encoding)
+  }
+  if (Buffer.isBuffer(_from)) {
+    return new DataView(_from.buffer, _from.byteOffset, _from.byteLength)
+  }
+  return fallback(_from, encoding)
+}
+bytes.toString = (_from, encoding) => {
+  _from = bytes(_from)
+  return Buffer.from(_from.buffer, _from.byteOffset, _from.byteLength).toString(encoding)
+}
+
+bytes.native = (_from, encoding) => {
+  if (Buffer.isBuffer(_from)) return _from
+  _from = bytes(_from, encoding)
+  return Buffer.from(_from.buffer, _from.byteOffset, _from.byteLength)
+}
+
+bytes._randomFill = crypto.randomFillSync
+
+module.exports = bytes
+
+
+/***/ }),
+
+/***/ 1227:
+/***/ ((module) => {
+
+function Caseless (dict) {
+  this.dict = dict || {}
+}
+Caseless.prototype.set = function (name, value, clobber) {
+  if (typeof name === 'object') {
+    for (var i in name) {
+      this.set(i, name[i], value)
+    }
+  } else {
+    if (typeof clobber === 'undefined') clobber = true
+    var has = this.has(name)
+
+    if (!clobber && has) this.dict[has] = this.dict[has] + ',' + value
+    else this.dict[has || name] = value
+    return has
+  }
+}
+Caseless.prototype.has = function (name) {
+  var keys = Object.keys(this.dict)
+    , name = name.toLowerCase()
+    ;
+  for (var i=0;i<keys.length;i++) {
+    if (keys[i].toLowerCase() === name) return keys[i]
+  }
+  return false
+}
+Caseless.prototype.get = function (name) {
+  name = name.toLowerCase()
+  var result, _key
+  var headers = this.dict
+  Object.keys(headers).forEach(function (key) {
+    _key = key.toLowerCase()
+    if (name === _key) result = headers[key]
+  })
+  return result
+}
+Caseless.prototype.swap = function (name) {
+  var has = this.has(name)
+  if (has === name) return
+  if (!has) throw new Error('There is no header than matches "'+name+'"')
+  this.dict[name] = this.dict[has]
+  delete this.dict[has]
+}
+Caseless.prototype.del = function (name) {
+  var has = this.has(name)
+  return delete this.dict[has || name]
+}
+
+module.exports = function (dict) {return new Caseless(dict)}
+module.exports.httpify = function (resp, headers) {
+  var c = new Caseless(headers)
+  resp.setHeader = function (key, value, clobber) {
+    if (typeof value === 'undefined') return
+    return c.set(key, value, clobber)
+  }
+  resp.hasHeader = function (key) {
+    return c.has(key)
+  }
+  resp.getHeader = function (key) {
+    return c.get(key)
+  }
+  resp.removeHeader = function (key) {
+    return c.del(key)
+  }
+  resp.headers = c.dict
+  return c
+}
+
+
+/***/ }),
+
 /***/ 1919:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -3743,6 +4313,43 @@ function isPlainObject(o) {
 }
 
 exports.isPlainObject = isPlainObject;
+
+
+/***/ }),
+
+/***/ 6060:
+/***/ ((module) => {
+
+"use strict";
+
+
+const isStream = stream =>
+	stream !== null &&
+	typeof stream === 'object' &&
+	typeof stream.pipe === 'function';
+
+isStream.writable = stream =>
+	isStream(stream) &&
+	stream.writable !== false &&
+	typeof stream._write === 'function' &&
+	typeof stream._writableState === 'object';
+
+isStream.readable = stream =>
+	isStream(stream) &&
+	stream.readable !== false &&
+	typeof stream._read === 'function' &&
+	typeof stream._readableState === 'object';
+
+isStream.duplex = stream =>
+	isStream.writable(stream) &&
+	isStream.readable(stream);
+
+isStream.transform = stream =>
+	isStream.duplex(stream) &&
+	typeof stream._transform === 'function' &&
+	typeof stream._transformState === 'object';
+
+module.exports = isStream;
 
 
 /***/ }),
@@ -13872,6 +14479,14 @@ module.exports = JSON.parse("{\"Aacute\":\"Á\",\"aacute\":\"á\",\"Abreve\":\"�
 
 "use strict";
 module.exports = require("assert");;
+
+/***/ }),
+
+/***/ 6417:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("crypto");;
 
 /***/ }),
 

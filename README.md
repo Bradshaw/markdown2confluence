@@ -8,6 +8,10 @@ This action renders a markdown file in your repo and pushes it toyour Confluence
 
 **Required** Path of the markdown file to push. Default `"README.md"`.
 
+### `page-id`
+
+**Required** ID of the Confluence page to update. Example `"2336653363"`.
+
 ### `api-url`
 
 **Required** URL of your Confluence API. Example `"https://<YOUR_CONFLUENCE_URL>/rest/api/"`.
@@ -25,7 +29,8 @@ This action renders a markdown file in your repo and pushes it toyour Confluence
 uses: Bradshaw/markdown2confluence@v0
 with:
   md-file: 'README.md'
+  page-id: 2336653363
   api-url: 'https://<YOUR_CONFLUENCE_URL>/rest/api/'
   api-user: 'user@example.com'
-  api-key: 'L3WW6dfSONhHdRJ5qE1dqdSo'
+  api-key: ${{ secrets.CONFLUENCE_TOKEN }}
 ```
