@@ -14,9 +14,8 @@ try {
   const mdPath = core.getInput(inputs.mdFile);
   console.log(`Reading ${mdPath}`);
   const content = fs.readFileSync(mdPath);
-  console.log('Content');
-  const payload = JSON.stringify(github.context.payload, undefined, 2)
-  console.log(`The event payload: ${payload}`);
+  console.log(content);
+  //const payload = JSON.stringify(github.context.payload, undefined, 2)
 } catch (error) {
   core.setFailed(error.message);
 }
