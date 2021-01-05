@@ -22,7 +22,7 @@ This action renders a markdown file in your repo and pushes it toyour Confluence
 
 ## Example usage
 ```yaml
-uses: actions/hello-world-javascript-action@v1.1
+uses: Bradshaw/markdown2confluence@v0
 with:
   md-file: 'README.md'
   api-url: 'https://<YOUR_CONFLUENCE_URL>/rest/api/'
