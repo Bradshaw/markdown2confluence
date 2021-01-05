@@ -1,0 +1,24 @@
+name: 'Markdown to Confluence'
+description: 'Update a Confluence page with markdown from a repo'
+inputs:
+  md-file:
+    description: 'Path of the markdown file to push'
+    required: true
+    default: 'CHANGELOG.md'
+  api-url:
+      description: 'Confluence API url'
+      required: true
+      default: 'https://<YOUR_CONFLUENCE_URL>/rest/api/'
+  api-user:
+      description: 'Confluence user email'
+      required: true
+      default: 'user@example.com'
+  api-key:
+      description: 'Confluence API key'
+      required: true
+  page-id:
+    description: 'id of the Confluence page to update'
+    required: true
+runs:
+  using: 'node12'
+  main: 'dist/index.js'
