@@ -9,8 +9,6 @@ const core = __webpack_require__(6806);
 const github = __webpack_require__(2429);
 const fs = __webpack_require__(5747);
 const bent = __webpack_require__(8138)
-// const MarkdownIt = require('markdown-it'),
-//     md = new MarkdownIt();
 const md = __webpack_require__(5759).markdown
 
 const inputs = {
@@ -51,7 +49,6 @@ try {
     [200, 403]
   )
   const content = md.toHTML(fs.readFileSync(mdPath, {encoding: "utf8"}));
-  console.log(content);
   async function updateWiki(){
       let currentPage = await getJSON(`/content/${page}?expand=version`)
       const title = currentPage.title;
@@ -70,22 +67,14 @@ try {
       }
       putJSON(`/content/${page}?expand=version`, payload)
         .catch((error) => {
-        console.error(error);
-        ;(async ()=>{
-          console.error("Error:");
-          console.error(error);
-          console.error(await error.json());
-          console.error(await error.text());
-
-        })().catch(e=>{
-          console.error("Caught")
-          console.error(e);
+          core.setFailed(error);
         })
-      })
+        .then(()=>{
+          console.log("Done");
+        })
   }
   updateWiki();
 } catch (error) {
-  console.error(error.message);
   core.setFailed(error.message);
 }
 
