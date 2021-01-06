@@ -2,8 +2,9 @@ const core = require('@actions/core');
 const github = require('@actions/github');
 const fs = require('fs');
 const bent = require('bent')
-const MarkdownIt = require('markdown-it'),
-    md = new MarkdownIt();
+// const MarkdownIt = require('markdown-it'),
+//     md = new MarkdownIt();
+const md = require('markdown').markdown
 
 const inputs = {
   mdFile: "md-file",
@@ -42,7 +43,7 @@ try {
     'json',
     [200, 403]
   )
-  const content = md.render(fs.readFileSync(mdPath, {encoding: "utf8"}));
+  const content = md.toHTML(fs.readFileSync(mdPath, {encoding: "utf8"}));
   console.log(content);
   async function updateWiki(){
       let currentPage = await getJSON(`/content/${page}?expand=version`)
