@@ -26,7 +26,7 @@ This action renders a markdown file in your repo and pushes it toyour Confluence
 
 ## Example usage
 ```yaml
-uses: Bradshaw/markdown2confluence@v0
+uses: Bradshaw/markdown2confluence@v1.2
 with:
   md-file: 'README.md'
   page-id: 2336653363
